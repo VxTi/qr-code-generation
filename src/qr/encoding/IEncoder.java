@@ -1,5 +1,7 @@
 package qr.encoding;
 
-public interface IStringEncoder {
-  boolean[] encode(String input);
+import java.util.BitSet;
+
+public interface IEncoder {
+  BitSet encode(String input);
 }

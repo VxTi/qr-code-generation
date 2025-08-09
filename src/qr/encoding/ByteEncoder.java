@@ -1,8 +1,10 @@
 package qr.encoding;
 
-public class ByteStringEncoder implements IStringEncoder {
+import java.util.BitSet;
+
+public class ByteEncoder implements IEncoder {
   @Override
-  public boolean[] encode(String input) {
-    return new boolean[0];
+  public BitSet encode(String input) {
+    return new BitSet();
   }
 }

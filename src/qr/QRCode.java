@@ -1,5 +1,7 @@
 package qr;
 
+import qr.encoding.Encoding;
+
 import java.awt.*;
 import java.awt.image.BufferedImage;
 
@@ -7,11 +9,13 @@ public class QRCode {
 
   // Size with quiet zone included
   private final int size;
+  private final int version;
+  private final Encoding encoding;
   private final ErrorCorrection ec;
   private final MaskPattern maskPattern;
+
   private final BufferedImage image;
   private final Graphics2D gfx;
-  private final int version;
 
   private static final Color ACTIVE_COLOR = Color.BLACK;
   private static final Color INACTIVE_COLOR = Color.WHITE;
@@ -20,22 +24,28 @@ public class QRCode {
   private static final int FINDER_PATTERN_SIZE = 7;
 
   private static final int QR_MASK = 0b101010000010010;
-  private static final int EC_POLYNOMIAL_MASK = 0b10100110111;
-  private static final int EC_VERSION_MASK = 0b1111100100101;
+  private static final int EC_FORMAT_POLYNOMIAL_MASK = 0b10100110111;
+  private static final int EC_VERSION_POLYNOMIAL_MASK = 0b1111100100101;
 
-  public QRCode(byte[] payload, ErrorCorrection errorCorrection, MaskPattern maskPattern) {
-    this.version = getVersionFromPayload(payload, errorCorrection);
+  public QRCode(
+      String data,
+      ErrorCorrection errorCorrection,
+      MaskPattern maskPattern,
+      Encoding encoding
+  ) {
+    this.version = getVersionFromPayload(data, errorCorrection);
     this.ec = errorCorrection;
+    this.encoding = encoding;
     this.maskPattern = maskPattern;
     this.size = 17 + version * 4;
 
     this.image = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
     this.gfx = (Graphics2D) image.getGraphics();
 
-    this.generate(payload);
+    this.encode(data);
   }
 
-  private void generate(byte[] payload) {
+  private void encode(String data) {
     int i, x, y;
     var generator = this.maskPattern.getGenerator();
 
@@ -46,19 +56,20 @@ public class QRCode {
     drawTimingPattern();
     drawFormatInfo();
     drawDarkModule();
+    drawVersionInfo();
   }
 
   public BufferedImage getImage() {
     return this.image;
   }
 
-  private int getVersionFromPayload(byte[] payload, ErrorCorrection errorCorrection) {
+  private static int getVersionFromPayload(String data, ErrorCorrection errorCorrection) {
     for (int i = 0; i < payloadVersionMapping.length; i++) {
-      if (payload.length < payloadVersionMapping[i][errorCorrection.ordinal()])
+      if (data.length() < payloadVersionMapping[i][errorCorrection.ordinal()])
         return i + 1;
     }
 
-    throw new IllegalArgumentException("Unable to determine version due to payload size being too large: " + payload.length);
+    throw new IllegalArgumentException("Unable to determine version due to payload size being too large: " + data.length());
   }
 
   private int getBitLength(int input) {
@@ -80,26 +91,26 @@ public class QRCode {
   private int ecFormatInfo() {
     int formatted = (ec.getMask() << 3 | maskPattern.getMask());
     int paddedFormattingBits = (formatted << 10) & 0x7FFF; // right-pad to ensure Length = 15 bits
-    int paddedGeneratorPolynomial = EC_POLYNOMIAL_MASK;
+    int paddedGeneratorPolynomial = EC_FORMAT_POLYNOMIAL_MASK;
 
-    int formattedLength = getBitLength(paddedFormattingBits);
-    int generatorLength = getBitLength(paddedGeneratorPolynomial);
+    int formatBitLength = getBitLength(paddedFormattingBits);
+    int generatorBitLength = getBitLength(paddedGeneratorPolynomial);
 
-    while (formattedLength > 11) {
+    while (formatBitLength > 11) {
       // right-pad generator to match formatting string length
-      if (generatorLength < formattedLength) {
-        paddedGeneratorPolynomial = EC_POLYNOMIAL_MASK << (formattedLength - generatorLength);
+      if (generatorBitLength < formatBitLength) {
+        paddedGeneratorPolynomial = EC_FORMAT_POLYNOMIAL_MASK << (formatBitLength - generatorBitLength);
       }
       paddedFormattingBits ^= paddedGeneratorPolynomial;
-      formattedLength = getBitLength(paddedFormattingBits);
+      formatBitLength = getBitLength(paddedFormattingBits);
     }
 
     // Final X-or, no need to pad generator since length is equal
-    paddedFormattingBits ^= EC_POLYNOMIAL_MASK;
+    paddedFormattingBits ^= EC_FORMAT_POLYNOMIAL_MASK;
 
     // right-pad if length is below 10
-    if (formattedLength < 10) {
-      paddedFormattingBits <<= (10 - formattedLength);
+    if (formatBitLength < 10) {
+      paddedFormattingBits <<= (10 - formatBitLength);
     }
 
     int combined = formatted << 10 | paddedFormattingBits;
@@ -108,33 +119,40 @@ public class QRCode {
   }
 
   private int ecVersionInfo() {
-    int paddedVersionBits = (this.version << 15) & 0x7FFF; // right-pad to ensure Length = 18 bits
-    int paddedGeneratorPolynomial = EC_POLYNOMIAL_MASK;
+    int paddedVersionBits = (this.version << 12);
+    int paddedGeneratorPolynomial = EC_VERSION_POLYNOMIAL_MASK;
 
-    int formattedLength = getBitLength(paddedVersionBits);
-    int generatorLength = getBitLength(paddedGeneratorPolynomial);
+    int versionBitLength = getBitLength(paddedVersionBits);
+    int generatorBitLength = getBitLength(paddedGeneratorPolynomial);
 
-    while (formattedLength > 12) {
+    do {
       // right-pad generator to match formatting string length
-      if (generatorLength < formattedLength) {
-        paddedGeneratorPolynomial = EC_POLYNOMIAL_MASK << (formattedLength - generatorLength);
-      }
+      paddedGeneratorPolynomial = EC_VERSION_POLYNOMIAL_MASK << (versionBitLength - generatorBitLength);
       paddedVersionBits ^= paddedGeneratorPolynomial;
-      formattedLength = getBitLength(paddedVersionBits);
-    }
+      versionBitLength = getBitLength(paddedVersionBits);
+    } while (versionBitLength > 12);
 
-    // Final X-or, no need to pad generator since length is equal
-    paddedVersionBits ^= EC_POLYNOMIAL_MASK;
-
-    // right-pad if length is below 10
-    if (formattedLength < 10) {
-      paddedVersionBits <<= (10 - formattedLength);
-    }
-
-    return formatted << 10 | paddedVersionBits;
+    return this.version << 12 | paddedVersionBits;
   }
 
-  private void drawVersionInfo() {}
+  private void drawVersionInfo() {
+    // Below version 7, version info is not rendered.
+    if (this.version < 7) return;
+
+    int versionInfoBits = ecVersionInfo();
+    int i, xOffset, yOffset, bitState;
+
+    for (i = 0; i < 18; i++) {
+      xOffset = i / 3;
+      yOffset = 3 - (i % 3);
+      bitState = versionInfoBits & (1 << i);
+
+      gfx.setColor(bitState != 0 ? ACTIVE_COLOR : INACTIVE_COLOR);
+
+      gfx.fillRect(xOffset, size - FINDER_PATTERN_SIZE - yOffset - 1, 1, 1);
+      gfx.fillRect(size - FINDER_PATTERN_SIZE - yOffset - 1, xOffset, 1, 1);
+    }
+  }
 
   private void drawFormatInfo() {
     int formatStringBits = ecFormatInfo();
@@ -190,10 +208,6 @@ public class QRCode {
     gfx.fillRect(2, size - adjustedFinderSize + 1, 3, 3);
   }
 
-  private int getColor(boolean active) {
-    return active ? 0xff000000 : -1;
-  }
-
   private static final int[][] payloadVersionMapping = {
       {17, 14, 11, 7},
       {32, 26, 20, 14},
@@ -236,45 +250,4 @@ public class QRCode {
       {2809, 2213, 1579, 1219},
       {2953, 2331, 1663, 1273}
   };
-
-  public static class Builder {
-    private ErrorCorrection errorCorrection = ErrorCorrection.LOW;
-    private MaskPattern maskPattern;
-    private byte[] payload;
-
-    public Builder() {
-    }
-
-    public Builder setMaskPattern(MaskPattern pattern) {
-      this.maskPattern = pattern;
-      return this;
-    }
-
-    public Builder setPayload(byte[] payload) {
-      this.payload = payload;
-      return this;
-    }
-
-    public Builder setErrorCorrection(ErrorCorrection errorCorrection) {
-      this.errorCorrection = errorCorrection;
-      return this;
-    }
-
-    public QRCode build() {
-      return new QRCode(payload, errorCorrection, maskPattern);
-    }
-  }
-
-  private String toBinaryString(int number) {
-    if (number == 0) {
-      return "0";
-    }
-
-    StringBuilder binaryNumber = new StringBuilder();
-    for (; number > 0; number >>= 1) {
-      binaryNumber.append(number % 2);
-    }
-
-    return binaryNumber.reverse().toString();
-  }
 }

@@ -1,21 +1,26 @@
 package qr.encoding;
 
-import java.nio.charset.StandardCharsets;
+import java.util.BitSet;
 
-public class NumericStringEncoder implements IStringEncoder {
+public class NumericEncoder {
 
-  @Override
-  public boolean[] encode(String input) {
+  public static BitSet encode(int[] input) {
+    var set = new BitSet();
     System.out.println("Encoding data: " + input);
-    byte[] bytes = input.getBytes(StandardCharsets.UTF_8);
-    int i, remainder;
 
-    for (i = 0; i < bytes.length; i += 3) {
-       remainder = bytes.length - i;
+    int i, remainder, numericBits;
 
-       
+    for (i = 0; i < input.length; i += 3) {
+       remainder = input.length - i + 1;
+
+       if (remainder >= 3) {
+         numericBits = input[i] | input[i + 1] | input[i + 2];
+         continue;
+       }
+
+       // Less than two remaining numbers
     }
 
-    return new boolean[0];
+    return set;
   }
 }
