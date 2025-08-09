@@ -12,7 +12,7 @@ public class Main {
     var qr = new QRCodeBuilder()
         .setErrorCorrection(ErrorCorrection.LOW)
         .setMaskPattern(MaskPattern.MASK4)
-        .setData("HELLO WORLD")
+        .setData("HELLO WORLD".repeat(7))
         .build();
 
     ImageIO.write(qr.getImage(), "PNG", new File("qr-code.png"));

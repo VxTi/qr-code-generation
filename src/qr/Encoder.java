@@ -1,16 +1,13 @@
 package qr;
 
-import qr.encoding.ByteEncoder;
-
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.regex.Pattern;
 
 public final class Encoder {
 
-  private static final int LENGTH_BYTE_COUNT = 2;
-  private static final int MODE_BYTE_COUNT = 1;
-  private static final int MODE_BIT_LENGTH = 4;
+  private static final int MODE_BIT_COUNT = 4;
+  private static final int LENGTH_BIT_COUNT = 9;
 
   private static final Pattern ALPHANUMERIC_PATTERN = Pattern.compile("^[0-9A-Z $%*+\\-./:]+$");
   private static final Pattern NUMERIC_PATTERN = Pattern.compile("^\\d+$");
@@ -60,8 +57,8 @@ public final class Encoder {
    * The encoding process chooses the most efficient QR code encoding mode based on the input data:
    * numeric, alphanumeric, or byte mode.
    *
-   * @param data the input string to be encoded; cannot be null
-   * @param version the QR code version, which dictates encoding parameters; typically ranges from 1 to 40
+   * @param data     the input string to be encoded; cannot be null
+   * @param version  the QR code version, which dictates encoding parameters; typically ranges from 1 to 40
    * @param encoding the character encoding to use when encoding in byte mode; cannot be null
    * @return a byte array representing the encoded data in the chosen QR code encoding mode
    */
@@ -82,7 +79,7 @@ public final class Encoder {
       return encodeAlphaNumeric(data, version);
     }
 
-    return ByteEncoder.encode(data.getBytes(encoding), version);
+    return encodeBytes(data.getBytes(encoding), version);
   }
 
 
@@ -103,34 +100,36 @@ public final class Encoder {
    *
    * @param input the string to check for alphanumeric compatibility; cannot be null
    * @return true if the input string contains only characters allowed by the QR code
-   *         alphanumeric encoding mode, false otherwise
+   * alphanumeric encoding mode, false otherwise
    */
   public static boolean canEncodeAlphaNumeric(String input) {
     return ALPHANUMERIC_PATTERN.matcher(input).find();
   }
 
   /**
-   * Encodes the given alphanumeric string into a byte array, following QR code standards.
-   * The encoding includes the mode indicator, length information, and encoded input data.
+   * Encodes the given input string into a byte array using the QR code encoding standard.
+   * The encoding may choose the most appropriate QR code mode (e.g., numeric, alphanumeric, byte)
+   * based on the provided input string and version.
    *
-   * @param input the alphanumeric string to be encoded; must contain only characters
-   *              allowed in the QR code alphanumeric mode (digits, uppercase letters, and some symbols)
+   * @param input   the string to be encoded; cannot be null or empty
    * @param version the QR code version, which affects the encoding parameters; typically ranges from 1 to 40
-   * @return a byte array representing the encoded alphanumeric data, including metadata and padding
+   * @return a byte array representing the encoded input string, including mode indicators, length information,
+   * and the encoded data
    */
-  public static byte[] encodeAlphaNumeric(String input, int version) {
-    int[] versionBitlengths = { 9, 11, 13};
-    int modeIndicator = 0b0010;
+  public static byte[] encodeBytes(byte[] input, int version) {
+    int i, j, bitOffset, byteOffset;
 
-    byte[] bytes = new byte[input.length() + LENGTH_BYTE_COUNT + MODE_BYTE_COUNT];
-
+    int modeIndicator = 0b0100;
+    int[] versionBitlengths = {8, 16, 16};
     int blockLength = versionBitlengths[Encoder.getVersionLengthOffset(version)];
-    int i, j, byteOffset, bitOffset, bitMask, charCode, variableBitLength;
 
-    int metadata = (modeIndicator << blockLength) | input.length();
-    int metadataLength = MODE_BIT_LENGTH + blockLength;
+    int totalBits = (input.length * 8) + MODE_BIT_COUNT + blockLength;
+    byte[] bytes = new byte[(int) Math.ceil(totalBits / 8.0)];
 
-    // Append the first 4 + n bytes of metadata (mode, payload size)
+    int metadata = (modeIndicator << blockLength) | input.length;
+    int metadataLength = MODE_BIT_COUNT + blockLength;
+
+    // Add metadata (mode indicator and length)
     for (bitOffset = 0; bitOffset < metadataLength; bitOffset++) {
       if ((metadata & (1 << (metadataLength - bitOffset - 1))) == 0) continue;
 
@@ -138,20 +137,14 @@ public final class Encoder {
       bytes[byteOffset] |= (byte) (1 << (7 - (bitOffset % 8)));
     }
 
-    for (i = 0; i < input.length(); i += 2) {
-      charCode = i + 1 < input.length()
-          ? (input.charAt(i) * 45) | input.charAt(i + 1)
-          : input.charAt(i);
-      variableBitLength = i + 1 < input.length() ? 11 : 6;
-
-      for (j = 0; j < variableBitLength; j++) {
-        bitMask = 1 << (blockLength - j - 1);
+    // Add input bytes
+    for (i = 0, bitOffset = metadataLength; i < input.length; i++) {
+      for (j = 0; j < 8; j++) {
+        if ((input[i] & (1 << (7 - j))) != 0) {
+          byteOffset = bitOffset / 8;
+          bytes[byteOffset] |= (byte) (1 << (7 - (bitOffset % 8)));
+        }
         bitOffset++;
-        byteOffset = bitOffset / 8;
-
-        if ((charCode & bitMask) == 0) continue;
-
-        bytes[byteOffset] |= (byte) (1 << (7 - (bitOffset % 8)));
       }
     }
 
@@ -159,10 +152,80 @@ public final class Encoder {
   }
 
   /**
+   * Encodes the given alphanumeric string into a byte array, following QR code standards.
+   * The encoding includes the mode indicator, length information, and encoded input data.
+   *
+   * @param input   the alphanumeric string to be encoded; must contain only characters
+   *                allowed in the QR code alphanumeric mode (digits, uppercase letters, and some symbols)
+   * @param version the QR code version, which affects the encoding parameters; typically ranges from 1 to 40
+   * @return a byte array representing the encoded alphanumeric data, including metadata and padding
+   */
+  public static byte[] encodeAlphaNumeric(String input, int version) {
+    int i, j, byteOffset, bitOffset, bitMask, charCode, variableBitLength, firstChar, secondChar;
+
+    int[] versionBitlengths = {9, 11, 13};
+
+    int blockLength = versionBitlengths[Encoder.getVersionLengthOffset(version)];
+    int modeIndicator = 0b0010;
+
+    int totalBits = ((input.length() / 2) * 11) + ((input.length() % 2) * 6) + MODE_BIT_COUNT + blockLength;
+    byte[] bytes = new byte[(int) Math.ceil(totalBits / 8.0)];
+
+    int metadata = (modeIndicator << blockLength) | input.length();
+    int metadataLength = MODE_BIT_COUNT + blockLength;
+
+    // Append the first 4 + n bytes of metadata (mode, payload size)
+    for (bitOffset = byteOffset = 0; bitOffset < metadataLength; bitOffset++) {
+      if ((metadata & (1 << (metadataLength - bitOffset - 1))) == 0) continue;
+
+      byteOffset = bitOffset / 8;
+      bytes[byteOffset] |= (byte) (1 << (7 - (bitOffset % 8)));
+    }
+
+    for (i = 0; i < input.length(); i += 2) {
+      firstChar = getAlphanumericValue(input.charAt(i));
+      secondChar = (i + 1 < input.length()) ? getAlphanumericValue(input.charAt(i + 1)) : -1;
+
+      charCode = (secondChar == -1) ? firstChar : (firstChar * 45 + secondChar);
+      variableBitLength = (secondChar == -1) ? 6 : 11;
+
+      for (j = 0; j < variableBitLength; j++) {
+        bitMask = 1 << (variableBitLength - j - 1);
+
+        if ((charCode & bitMask) != 0) {
+          bytes[byteOffset] |= (byte) (1 << (7 - (bitOffset % 8)));
+        }
+
+        bitOffset++;
+        byteOffset = bitOffset / 8;
+      }
+    }
+
+    return bytes;
+  }
+
+  private static int getAlphanumericValue(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'Z') return c - 'A' + 10;
+    return switch (c) {
+      case ' ' -> 36;
+      case '$' -> 37;
+      case '%' -> 38;
+      case '*' -> 39;
+      case '+' -> 40;
+      case '-' -> 41;
+      case '.' -> 42;
+      case '/' -> 43;
+      case ':' -> 44;
+      default -> -1;
+    };
+  }
+
+  /**
    * Encodes a given array of numeric digits into a byte array suitable for QR code encoding,
    * following the QR code numeric mode specification.
    *
-   * @param input an array of integers representing the numeric digits to encode; values must be in the range 0-9
+   * @param input   an array of integers representing the numeric digits to encode; values must be in the range 0-9
    * @param version the QR code version, which dictates encoding parameters; typically ranges from 1 to 40
    * @return a byte array containing the encoded numeric data with appropriate metadata and padding
    */
@@ -173,11 +236,11 @@ public final class Encoder {
     int[] versionBitlengths = {10, 12, 14};
 
     var blockLength = versionBitlengths[Encoder.getVersionLengthOffset(version)];
-    byte[] bytes = new byte[(int) Math.ceil(input.length / 3.0) + LENGTH_BYTE_COUNT + MODE_BYTE_COUNT];
+    byte[] bytes = new byte[(int) (Math.ceil((input.length / 3.0f) * 10 + LENGTH_BIT_COUNT + MODE_BIT_COUNT) / 8.0)];
 
     // Metadata for payload; mode indicator and input length (4 + n bytes)
     int metadata = (modeIndicator << blockLength) | input.length;
-    int metadataLength = MODE_BIT_LENGTH + blockLength;
+    int metadataLength = MODE_BIT_COUNT + blockLength;
 
     for (bitOffset = 0; bitOffset < metadataLength; bitOffset++) {
       if ((metadata & (1 << (metadataLength - bitOffset - 1))) == 0) continue;
@@ -186,23 +249,23 @@ public final class Encoder {
       bytes[byteOffset] |= (byte) (1 << (7 - (bitOffset % 8)));
     }
 
-    for (i = 0; i < input.length; i += 3) {
+    for (i = 0, bitOffset = metadataLength; i < input.length; i += 3) {
       // Compose a single number from three digits
       for (j = computedNumber = 0; j < 3 && i + j < input.length; j++) {
         computedNumber = computedNumber * 10 + input[i + j];
       }
 
-      variableBitLength = computedNumber >= 100 ? 10 : computedNumber >= 10 ? 7 : 4;
+      variableBitLength = j == 3 ? 10 : j == 2 ? 7 : 4;
 
-      for (j = 0; j < blockLength; j++) {
-        bitMask = 1 << (blockLength - j - 1);
-        bitOffset++;
+      for (j = 0; j < variableBitLength; j++) {
+        bitMask = 1 << (variableBitLength - j - 1);
         byteOffset = bitOffset / 8;
 
-        // Won't break out of the loop, since we have to keep incrementing the bitOffset
-        if ((computedNumber & bitMask) == 0 || j >= variableBitLength) continue;
+        if ((computedNumber & bitMask) != 0) {
+          bytes[byteOffset] |= (byte) (1 << (7 - (bitOffset % 8)));
+        }
 
-        bytes[byteOffset] |= (byte) (1 << (7 - (bitOffset % 8)));
+        bitOffset++;
       }
     }
 

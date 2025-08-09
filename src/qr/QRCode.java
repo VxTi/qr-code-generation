@@ -19,13 +19,14 @@ public class QRCode {
 
   private static final int QUIET_ZONE_SIZE = 3;
   private static final int FINDER_PATTERN_SIZE = 7;
+  private static final int ALIGNMENT_PATTERN_SIZE = 5;
 
   private static final int QR_MASK = 0b101010000010010;
   private static final int EC_FORMAT_POLYNOMIAL_MASK = 0b10100110111;
   private static final int EC_VERSION_POLYNOMIAL_MASK = 0b1111100100101;
 
   protected QRCode(String data, ErrorCorrection errorCorrection, MaskPattern maskPattern) {
-    this.version = getVersionFromPayload(data, errorCorrection);
+    this.version = Version.fromData(data, errorCorrection);
     this.ec = errorCorrection;
     this.maskPattern = maskPattern;
     this.size = 17 + version * 4;
@@ -40,11 +41,15 @@ public class QRCode {
     int i, x, y;
     var generator = this.maskPattern.getGenerator();
 
+    gfx.setColor(INACTIVE_COLOR);
+    gfx.fillRect(0, 0, size, size);
+
     drawFinderPatterns();
     drawTimingPattern();
     drawFormatInfo();
     drawDarkModule();
     drawVersionInfo();
+    drawAlignmentPatterns();
 
     encodeData(data);
   }
@@ -54,37 +59,13 @@ public class QRCode {
   }
 
   /**
-   * Determines the QR code version based on the provided data and error correction level.
-   * The method evaluates the length of the input data against predefined size constraints
-   * for each version and error correction level. It returns the version number that
-   * can accommodate the given data and error correction level. If no suitable version is
-   * found, an IllegalArgumentException is thrown.
-   *
-   * @param data the input data string to be encoded into the QR code
-   * @param errorCorrection the level of error correction to be applied, determining the
-   *                        allowed data size for each version
-   * @return the version number that can accommodate the input data with the specified
-   *         error correction level
-   * @throws IllegalArgumentException if the input data exceeds the maximum size
-   *                                  supported by the highest version
-   */
-  private static int getVersionFromPayload(String data, ErrorCorrection errorCorrection) {
-    for (int i = 0; i < payloadVersionMapping.length; i++) {
-      if (data.length() < payloadVersionMapping[i][errorCorrection.ordinal()])
-        return i + 1;
-    }
-
-    throw new IllegalArgumentException("Unable to determine version due to payload size being too large: " + data.length());
-  }
-
-  /**
    * Computes and returns the format information for error correction and mask patterns
    * as a 15-bit integer encoded with error correction and masking logic. This value is
    * used to draw the format information in a QR code.
    *
    * @return a 15-bit integer representing the formatted error correction and mask pattern
-   *         information, including error correction bits and a final XOR with a predefined
-   *         QR mask constant.
+   * information, including error correction bits and a final XOR with a predefined
+   * QR mask constant.
    */
   private int ecFormatInfo() {
     int formatted = (ec.getMask() << 3 | maskPattern.getMask());
@@ -124,7 +105,7 @@ public class QRCode {
    * with the calculated error correction bits.
    *
    * @return an integer representing the combined version number and error
-   *         correction bits for version information in a QR code.
+   * correction bits for version information in a QR code.
    */
   private int ecVersionInfo() {
     int paddedVersionBits = (this.version << 12);
@@ -232,46 +213,44 @@ public class QRCode {
     gfx.fillRect(2, size - adjustedFinderSize + 1, 3, 3);
   }
 
-  private static final int[][] payloadVersionMapping = {
-      {17, 14, 11, 7},
-      {32, 26, 20, 14},
-      {53, 42, 32, 24},
-      {78, 62, 46, 34},
-      {106, 84, 60, 44},
-      {134, 106, 74, 58},
-      {154, 122, 86, 64},
-      {192, 152, 108, 84},
-      {230, 180, 130, 98},
-      {271, 213, 151, 119},
-      {321, 251, 177, 137},
-      {367, 287, 203, 155},
-      {425, 331, 241, 177},
-      {458, 362, 258, 194},
-      {520, 412, 292, 220},
-      {586, 450, 322, 250},
-      {644, 504, 364, 280},
-      {718, 560, 394, 310},
-      {792, 624, 442, 338},
-      {858, 666, 482, 382},
-      {929, 711, 509, 403},
-      {1003, 779, 565, 439},
-      {1091, 857, 611, 461},
-      {1171, 911, 661, 511},
-      {1273, 997, 715, 535},
-      {1367, 1059, 751, 593},
-      {1465, 1125, 805, 625},
-      {1528, 1190, 868, 658},
-      {1628, 1264, 908, 698},
-      {1732, 1370, 982, 742},
-      {1840, 1452, 1030, 790},
-      {1952, 1538, 1112, 842},
-      {2068, 1628, 1168, 898},
-      {2188, 1722, 1228, 958},
-      {2303, 1809, 1283, 983},
-      {2431, 1911, 1351, 1051},
-      {2563, 1989, 1423, 1093},
-      {2699, 2099, 1499, 1139},
-      {2809, 2213, 1579, 1219},
-      {2953, 2331, 1663, 1273}
-  };
+  private int[] getAlignmentPatternPositions() {
+    if (version == 1) return new int[0];
+
+    int step = version <= 6 ? 0 : (int) Math.round((version * 4 + 4) / (Math.floor(version / 7.) + 2) * 2) / 2;
+    int[] positions = new int[version / 7 + 2];
+
+    positions[0] = 6;
+    positions[positions.length - 1] = size - 7;
+
+    for (int i = positions.length - 2; i > 0; i--) {
+      positions[i] = positions[i + 1] - step;
+    }
+
+    return positions;
+  }
+
+  private void drawAlignmentPatterns() {
+    if (version == 1) return;
+
+    int[] positions = getAlignmentPatternPositions();
+
+    for (int y : positions) {
+      for (int x : positions) {
+        // Skip if pattern would overlap with finder patterns
+        if ((x < 8 && y < 8) ||
+            (x > size - 9 && y < 8) ||
+            (x < 8 && y > size - 9)) {
+          continue;
+        }
+
+        // Draw the alignment pattern
+        gfx.setColor(ACTIVE_COLOR);
+        gfx.fillRect(x - 2, y - 2, ALIGNMENT_PATTERN_SIZE, ALIGNMENT_PATTERN_SIZE);
+        gfx.setColor(INACTIVE_COLOR);
+        gfx.fillRect(x - 1, y - 1, 3, 3);
+        gfx.setColor(ACTIVE_COLOR);
+        gfx.fillRect(x, y, 1, 1);
+      }
+    }
+  }
 }
