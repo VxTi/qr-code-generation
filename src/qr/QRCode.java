@@ -10,8 +10,9 @@ public class QRCode {
   private final int version;
   private final ErrorCorrection ec;
   private final MaskPattern maskPattern;
+  private final byte[] encodedData;
 
-  private final BufferedImage image;
+  private BufferedImage image;
   private final Graphics2D gfx;
 
   private static final Color ACTIVE_COLOR = Color.BLACK;
@@ -21,7 +22,6 @@ public class QRCode {
   private static final int FINDER_PATTERN_SIZE = 7;
   private static final int ALIGNMENT_PATTERN_SIZE = 5;
 
-  private static final int QR_MASK = 0b101010000010010;
   private static final int EC_FORMAT_POLYNOMIAL_MASK = 0b10100110111;
   private static final int EC_VERSION_POLYNOMIAL_MASK = 0b1111100100101;
 
@@ -34,13 +34,11 @@ public class QRCode {
     this.image = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
     this.gfx = (Graphics2D) image.getGraphics();
 
-    this.generate(data);
+    this.encodedData = encodeData(data);
+    this.generateImage();
   }
 
-  private void generate(String data) {
-    int i, x, y;
-    var generator = this.maskPattern.getGenerator();
-
+  private void generateImage() {
     gfx.setColor(INACTIVE_COLOR);
     gfx.fillRect(0, 0, size, size);
 
@@ -50,101 +48,31 @@ public class QRCode {
     drawDarkModule();
     drawVersionInfo();
     drawAlignmentPatterns();
+    drawData();
 
-    encodeData(data);
+    BufferedImage silentAreaImage = new BufferedImage(size + 2 * QUIET_ZONE_SIZE, size + 2 * QUIET_ZONE_SIZE, BufferedImage.TYPE_INT_ARGB);
+    Graphics2D gfxSilentArea = silentAreaImage.createGraphics();
+    gfxSilentArea.setColor(INACTIVE_COLOR);
+    gfxSilentArea.fillRect(0, 0, size + 2 * QUIET_ZONE_SIZE, size + 2 * QUIET_ZONE_SIZE);
+
+    gfxSilentArea.drawImage(image, QUIET_ZONE_SIZE, QUIET_ZONE_SIZE, null);
+
+    this.image = silentAreaImage;
   }
 
   public BufferedImage getImage() {
     return this.image;
   }
 
-  /**
-   * Computes and returns the format information for error correction and mask patterns
-   * as a 15-bit integer encoded with error correction and masking logic. This value is
-   * used to draw the format information in a QR code.
-   *
-   * @return a 15-bit integer representing the formatted error correction and mask pattern
-   * information, including error correction bits and a final XOR with a predefined
-   * QR mask constant.
-   */
-  private int ecFormatInfo() {
-    int formatted = (ec.getMask() << 3 | maskPattern.getMask());
-    int paddedFormattingBits = (formatted << 10) & 0x7FFF; // right-pad to ensure Length = 15 bits
-    int paddedGeneratorPolynomial = EC_FORMAT_POLYNOMIAL_MASK;
-
-    int formatBitLength = Encoder.getBitLength(paddedFormattingBits);
-    int generatorBitLength = Encoder.getBitLength(paddedGeneratorPolynomial);
-
-    while (formatBitLength > 11) {
-      // right-pad generator to match formatting string length
-      if (generatorBitLength < formatBitLength) {
-        paddedGeneratorPolynomial = EC_FORMAT_POLYNOMIAL_MASK << (formatBitLength - generatorBitLength);
-      }
-      paddedFormattingBits ^= paddedGeneratorPolynomial;
-      formatBitLength = Encoder.getBitLength(paddedFormattingBits);
-    }
-
-    // Final X-or, no need to pad generator since length is equal
-    paddedFormattingBits ^= EC_FORMAT_POLYNOMIAL_MASK;
-
-    // right-pad if the length is below 10
-    if (formatBitLength < 10) {
-      paddedFormattingBits <<= (10 - formatBitLength);
-    }
-
-    int combined = formatted << 10 | paddedFormattingBits;
-
-    return combined ^ QR_MASK;
-  }
-
-  /**
-   * Computes and returns the version information for the QR code as an integer
-   * encoded with error correction bits. This method applies a polynomial division
-   * to calculate the remainder, which is used to provide version information
-   * conforming to QR code standards. The result combines the version number
-   * with the calculated error correction bits.
-   *
-   * @return an integer representing the combined version number and error
-   * correction bits for version information in a QR code.
-   */
-  private int ecVersionInfo() {
-    int paddedVersionBits = (this.version << 12);
-    int paddedGeneratorPolynomial = EC_VERSION_POLYNOMIAL_MASK;
-
-    int versionBitLength = Encoder.getBitLength(paddedVersionBits);
-    int generatorBitLength = Encoder.getBitLength(paddedGeneratorPolynomial);
-
-    do {
-      // right-pad generator to match formatting string length
-      paddedGeneratorPolynomial = EC_VERSION_POLYNOMIAL_MASK << (versionBitLength - generatorBitLength);
-      paddedVersionBits ^= paddedGeneratorPolynomial;
-      versionBitLength = Encoder.getBitLength(paddedVersionBits);
-    } while (versionBitLength > 12);
-
-    return this.version << 12 | paddedVersionBits;
-  }
-
   private byte[] encodeData(String data) {
-    var encodedBytes = Encoder.encode(data, version);
-
-    System.out.printf("Encoded: %s", toBinaryString(encodedBytes));
-
-    return encodedBytes;
-  }
-
-  private String toBinaryString(byte[] bytes) {
-    StringBuilder sb = new StringBuilder();
-    for (byte b : bytes) {
-      sb.append(String.format("%8s", Integer.toBinaryString(b & 0xFF)).replace(' ', '0'));
-    }
-    return sb.toString();
+    return Encoder.encode(data, version);
   }
 
   private void drawVersionInfo() {
     // Below version 7, version info is not rendered.
     if (this.version < 7) return;
 
-    int versionInfoBits = ecVersionInfo();
+    int versionInfoBits = Encoder.ECVersionInfo(version, EC_VERSION_POLYNOMIAL_MASK);
     int i, xOffset, yOffset, bitState;
 
     for (i = 0; i < 18; i++) {
@@ -160,7 +88,7 @@ public class QRCode {
   }
 
   private void drawFormatInfo() {
-    int formatStringBits = ecFormatInfo();
+    int formatStringBits = Encoder.ECFormatInfo(ec, maskPattern, EC_FORMAT_POLYNOMIAL_MASK);
 
     int i, offset, bitState;
 
@@ -213,6 +141,28 @@ public class QRCode {
     gfx.fillRect(2, size - adjustedFinderSize + 1, 3, 3);
   }
 
+  private void drawData() {
+    int x, y, bitOffset, bitState, byteIndex, reservedOffset;
+    var generator = this.maskPattern.getGenerator();
+
+    for (byteIndex = reservedOffset = 0; byteIndex < encodedData.length; byteIndex++) {
+      for (bitOffset = 0; bitOffset < 8; bitOffset++) {
+        x = size - ((byteIndex + bitOffset + reservedOffset) % 2 == 0 ? bitOffset * 2 + 1 : bitOffset * 2);
+        y = size - (byteIndex + bitOffset + reservedOffset) % size;
+
+        while (isReservedArea(x, y)) {
+          reservedOffset++;
+          x = size - ((byteIndex + bitOffset + reservedOffset) % 2 == 0 ? bitOffset * 2 + 1 : bitOffset * 2);
+          y = size - (byteIndex + bitOffset + reservedOffset) % size;
+        }
+        bitState = (this.encodedData[byteIndex] & (1 << (7 - bitOffset))) ^ (generator.mask(x, y) ? 1 : 0);
+
+        gfx.setColor(bitState != 0 ? ACTIVE_COLOR : INACTIVE_COLOR);
+        gfx.fillRect(x, y, 1, 1);
+      }
+    }
+  }
+
   private int[] getAlignmentPatternPositions() {
     if (version == 1) return new int[0];
 
@@ -237,9 +187,7 @@ public class QRCode {
     for (int y : positions) {
       for (int x : positions) {
         // Skip if pattern would overlap with finder patterns
-        if ((x < 8 && y < 8) ||
-            (x > size - 9 && y < 8) ||
-            (x < 8 && y > size - 9)) {
+        if (isFinderPattern(x, y)) {
           continue;
         }
 
@@ -252,5 +200,59 @@ public class QRCode {
         gfx.fillRect(x, y, 1, 1);
       }
     }
+  }
+
+  private boolean isFinderPattern(int x, int y) {
+    boolean topLeft = x >= 0 && y >= 0 && x < FINDER_PATTERN_SIZE && y < FINDER_PATTERN_SIZE;
+    boolean topRight = x >= size - FINDER_PATTERN_SIZE && y >= 0 && x < size && y < FINDER_PATTERN_SIZE;
+    boolean bottomLeft = x >= 0 && y >= size - FINDER_PATTERN_SIZE && x < FINDER_PATTERN_SIZE && y < size;
+
+    return topLeft || topRight || bottomLeft;
+  }
+
+  private boolean isAlignmentPattern(int x, int y) {
+    int[] alignmentPositions = getAlignmentPatternPositions();
+
+    if (alignmentPositions.length == 0) return false;
+
+    int dx, dy;
+
+    for (int position : alignmentPositions) {
+      dx = Math.abs(x - position);
+      dy = Math.abs(y - position);
+
+      if (dx <= 2 && dy <= 2) return true;
+    }
+
+    return false;
+  }
+
+  private boolean isVersionArea(int x, int y) {
+    if (x < 0 || y < 0) return false;
+
+    return (x >= size - FINDER_PATTERN_SIZE - 4 && x <= size - FINDER_PATTERN_SIZE - 1 && y <= FINDER_PATTERN_SIZE - 4)
+        || (x <= 6 && y >= size - FINDER_PATTERN_SIZE - 4 && y <= size - FINDER_PATTERN_SIZE - 1);
+  }
+
+  private boolean isReservedArea(int x, int y) {
+    if (isFinderPattern(x, y)) return true;
+
+    if (isAlignmentPattern(x, y)) return true;
+
+    // alignment line
+    if (y == FINDER_PATTERN_SIZE || x == FINDER_PATTERN_SIZE) return true;
+
+    // Dark module
+    if (x == FINDER_PATTERN_SIZE + 1 && y == size - FINDER_PATTERN_SIZE - 1)
+      return true;
+
+    if (
+        (x <= FINDER_PATTERN_SIZE + 2 && y < FINDER_PATTERN_SIZE + 2) ||// top left
+            (x >= size - FINDER_PATTERN_SIZE - 1 && y <= FINDER_PATTERN_SIZE + 2) || // top right
+            (x <= FINDER_PATTERN_SIZE + 2 && y >= size - FINDER_PATTERN_SIZE) // bottom left
+    ) return true;
+
+    // Check if version area is occupied
+    return version >= 7 && isVersionArea(x, y);
   }
 }
