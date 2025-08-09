@@ -1,7 +1,5 @@
 package qr;
 
-import qr.encoding.Encoding;
-
 import java.awt.*;
 import java.awt.image.BufferedImage;
 
@@ -10,7 +8,6 @@ public class QRCode {
   // Size with quiet zone included
   private final int size;
   private final int version;
-  private final Encoding encoding;
   private final ErrorCorrection ec;
   private final MaskPattern maskPattern;
 
@@ -27,42 +24,50 @@ public class QRCode {
   private static final int EC_FORMAT_POLYNOMIAL_MASK = 0b10100110111;
   private static final int EC_VERSION_POLYNOMIAL_MASK = 0b1111100100101;
 
-  public QRCode(
-      String data,
-      ErrorCorrection errorCorrection,
-      MaskPattern maskPattern,
-      Encoding encoding
-  ) {
+  protected QRCode(String data, ErrorCorrection errorCorrection, MaskPattern maskPattern) {
     this.version = getVersionFromPayload(data, errorCorrection);
     this.ec = errorCorrection;
-    this.encoding = encoding;
     this.maskPattern = maskPattern;
     this.size = 17 + version * 4;
 
     this.image = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
     this.gfx = (Graphics2D) image.getGraphics();
 
-    this.encode(data);
+    this.generate(data);
   }
 
-  private void encode(String data) {
+  private void generate(String data) {
     int i, x, y;
     var generator = this.maskPattern.getGenerator();
-
-    gfx.setColor(INACTIVE_COLOR);
-    gfx.fillRect(0, 0, size, size);
 
     drawFinderPatterns();
     drawTimingPattern();
     drawFormatInfo();
     drawDarkModule();
     drawVersionInfo();
+
+    encodeData(data);
   }
 
   public BufferedImage getImage() {
     return this.image;
   }
 
+  /**
+   * Determines the QR code version based on the provided data and error correction level.
+   * The method evaluates the length of the input data against predefined size constraints
+   * for each version and error correction level. It returns the version number that
+   * can accommodate the given data and error correction level. If no suitable version is
+   * found, an IllegalArgumentException is thrown.
+   *
+   * @param data the input data string to be encoded into the QR code
+   * @param errorCorrection the level of error correction to be applied, determining the
+   *                        allowed data size for each version
+   * @return the version number that can accommodate the input data with the specified
+   *         error correction level
+   * @throws IllegalArgumentException if the input data exceeds the maximum size
+   *                                  supported by the highest version
+   */
   private static int getVersionFromPayload(String data, ErrorCorrection errorCorrection) {
     for (int i = 0; i < payloadVersionMapping.length; i++) {
       if (data.length() < payloadVersionMapping[i][errorCorrection.ordinal()])
@@ -72,29 +77,22 @@ public class QRCode {
     throw new IllegalArgumentException("Unable to determine version due to payload size being too large: " + data.length());
   }
 
-  private int getBitLength(int input) {
-    int mask, offset;
-
-    for (offset = 0; offset < 32; offset++) {
-      // Create mask for trailing bits
-      mask = -(1 << offset);
-
-      // Check if input has bits at the trailing region
-      if ((input & mask) == 0) {
-        return offset;
-      }
-    }
-
-    return 32;
-  }
-
+  /**
+   * Computes and returns the format information for error correction and mask patterns
+   * as a 15-bit integer encoded with error correction and masking logic. This value is
+   * used to draw the format information in a QR code.
+   *
+   * @return a 15-bit integer representing the formatted error correction and mask pattern
+   *         information, including error correction bits and a final XOR with a predefined
+   *         QR mask constant.
+   */
   private int ecFormatInfo() {
     int formatted = (ec.getMask() << 3 | maskPattern.getMask());
     int paddedFormattingBits = (formatted << 10) & 0x7FFF; // right-pad to ensure Length = 15 bits
     int paddedGeneratorPolynomial = EC_FORMAT_POLYNOMIAL_MASK;
 
-    int formatBitLength = getBitLength(paddedFormattingBits);
-    int generatorBitLength = getBitLength(paddedGeneratorPolynomial);
+    int formatBitLength = Encoder.getBitLength(paddedFormattingBits);
+    int generatorBitLength = Encoder.getBitLength(paddedGeneratorPolynomial);
 
     while (formatBitLength > 11) {
       // right-pad generator to match formatting string length
@@ -102,13 +100,13 @@ public class QRCode {
         paddedGeneratorPolynomial = EC_FORMAT_POLYNOMIAL_MASK << (formatBitLength - generatorBitLength);
       }
       paddedFormattingBits ^= paddedGeneratorPolynomial;
-      formatBitLength = getBitLength(paddedFormattingBits);
+      formatBitLength = Encoder.getBitLength(paddedFormattingBits);
     }
 
     // Final X-or, no need to pad generator since length is equal
     paddedFormattingBits ^= EC_FORMAT_POLYNOMIAL_MASK;
 
-    // right-pad if length is below 10
+    // right-pad if the length is below 10
     if (formatBitLength < 10) {
       paddedFormattingBits <<= (10 - formatBitLength);
     }
@@ -118,21 +116,47 @@ public class QRCode {
     return combined ^ QR_MASK;
   }
 
+  /**
+   * Computes and returns the version information for the QR code as an integer
+   * encoded with error correction bits. This method applies a polynomial division
+   * to calculate the remainder, which is used to provide version information
+   * conforming to QR code standards. The result combines the version number
+   * with the calculated error correction bits.
+   *
+   * @return an integer representing the combined version number and error
+   *         correction bits for version information in a QR code.
+   */
   private int ecVersionInfo() {
     int paddedVersionBits = (this.version << 12);
     int paddedGeneratorPolynomial = EC_VERSION_POLYNOMIAL_MASK;
 
-    int versionBitLength = getBitLength(paddedVersionBits);
-    int generatorBitLength = getBitLength(paddedGeneratorPolynomial);
+    int versionBitLength = Encoder.getBitLength(paddedVersionBits);
+    int generatorBitLength = Encoder.getBitLength(paddedGeneratorPolynomial);
 
     do {
       // right-pad generator to match formatting string length
       paddedGeneratorPolynomial = EC_VERSION_POLYNOMIAL_MASK << (versionBitLength - generatorBitLength);
       paddedVersionBits ^= paddedGeneratorPolynomial;
-      versionBitLength = getBitLength(paddedVersionBits);
+      versionBitLength = Encoder.getBitLength(paddedVersionBits);
     } while (versionBitLength > 12);
 
     return this.version << 12 | paddedVersionBits;
+  }
+
+  private byte[] encodeData(String data) {
+    var encodedBytes = Encoder.encode(data, version);
+
+    System.out.printf("Encoded: %s", toBinaryString(encodedBytes));
+
+    return encodedBytes;
+  }
+
+  private String toBinaryString(byte[] bytes) {
+    StringBuilder sb = new StringBuilder();
+    for (byte b : bytes) {
+      sb.append(String.format("%8s", Integer.toBinaryString(b & 0xFF)).replace(' ', '0'));
+    }
+    return sb.toString();
   }
 
   private void drawVersionInfo() {

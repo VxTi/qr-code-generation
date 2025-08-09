@@ -1,4 +1,3 @@
-import qr.encoding.Encoding;
 import qr.MaskPattern;
 import qr.ErrorCorrection;
 import qr.QRCodeBuilder;
@@ -13,8 +12,7 @@ public class Main {
     var qr = new QRCodeBuilder()
         .setErrorCorrection(ErrorCorrection.LOW)
         .setMaskPattern(MaskPattern.MASK4)
-        .setEncoding(Encoding.NUMERIC)
-        .setData("Test")
+        .setData("HELLO WORLD")
         .build();
 
     ImageIO.write(qr.getImage(), "PNG", new File("qr-code.png"));
