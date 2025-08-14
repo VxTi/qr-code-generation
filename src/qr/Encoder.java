@@ -11,6 +11,8 @@ public final class Encoder {
 
   private static final int QR_MASK = 0b101010000010010;
 
+  private static final byte[] REMAINDER_BYTES = {(byte) 0b11101100, (byte) 0b00010001};
+
   private static final int[] RS_LOG_TABLE = new int[256];
   private static final int[] RS_EXP_TABLE = new int[256];
   private static final int[] RS_GENERATOR_POLY = {0, 43, 139, 206, 78, 43, 239, 123, 206, 214, 147, 24, 99, 150, 39, 243, 163, 136};
@@ -71,12 +73,13 @@ public final class Encoder {
    * defaulting to UTF-8 character encoding. The method chooses the optimal QR code encoding mode
    * (numeric, alphanumeric, or byte) based on the content of the input string.
    *
-   * @param data    the input string to be encoded; cannot be null
-   * @param version the QR code version, which dictates encoding parameters; typically ranges from 1 to 40
+   * @param data            the input string to be encoded; cannot be null
+   * @param version         the QR code version, which dictates encoding parameters; typically ranges from 1 to 40
+   * @param errorCorrection The error correction to use for the encoding
    * @return a byte array representing the encoded data in the chosen QR code encoding mode
    */
-  public static byte[] encode(String data, int version) {
-    return encode(data, version, StandardCharsets.UTF_8);
+  public static byte[] encode(String data, int version, ErrorCorrection errorCorrection) {
+    return encode(data, version, errorCorrection, StandardCharsets.UTF_8);
   }
 
   /**
@@ -84,12 +87,13 @@ public final class Encoder {
    * The encoding process chooses the most efficient QR code encoding mode based on the input data:
    * numeric, alphanumeric, or byte mode.
    *
-   * @param data     the input string to be encoded; cannot be null
-   * @param version  the QR code version, which dictates encoding parameters; typically ranges from 1 to 40
-   * @param encoding the character encoding to use when encoding in byte mode; cannot be null
+   * @param data            the input string to be encoded; cannot be null
+   * @param version         the QR code version, which dictates encoding parameters; typically ranges from 1 to 40
+   * @param errorCorrection The error correction to use for the encoding
+   * @param encoding        the character encoding to use when encoding in byte mode; cannot be null
    * @return a byte array representing the encoded data in the chosen QR code encoding mode
    */
-  public static byte[] encode(String data, int version, Charset encoding) {
+  public static byte[] encode(String data, int version, ErrorCorrection errorCorrection, Charset encoding) {
     // First step; figure out which encoding method is most efficient for the input data.
 
     byte[] encodedBytes = canEncodeNumeric(data)
@@ -101,7 +105,21 @@ public final class Encoder {
     byte[] codewords = createCodewordsForBytes(encodedBytes);
     int remainderBits = getRemainderBitsForVersion(version);
 
-    return codewords;
+    int capacity = Version.getCapacityForVersion(version, errorCorrection);
+
+    byte[] totalBytes = new byte[capacity * 8];
+
+    if (encodedBytes.length < capacity) {
+      System.arraycopy(encodedBytes, 0, totalBytes, 0, encodedBytes.length);
+
+      for (int i = 0; i < capacity - encodedBytes.length; i++) {
+        totalBytes[i + encodedBytes.length] = REMAINDER_BYTES[i % 2];
+      }
+    }
+
+    System.out.printf("Total bytes: %d", totalBytes.length);
+
+    return totalBytes;
   }
 
   private static int getRemainderBitsForVersion(int version) {
@@ -440,4 +458,47 @@ public final class Encoder {
 
     return ecBytes;
   }
+
+  public static final int[][] VERSION_EC_CAPACITY_MAPPING = {
+      {17, 14, 11, 7},
+      {32, 26, 20, 14},
+      {53, 42, 32, 24},
+      {78, 62, 46, 34},
+      {106, 84, 60, 44},
+      {134, 106, 74, 58},
+      {154, 122, 86, 64},
+      {192, 152, 108, 84},
+      {230, 180, 130, 98},
+      {271, 213, 151, 119},
+      {321, 251, 177, 137},
+      {367, 287, 203, 155},
+      {425, 331, 241, 177},
+      {458, 362, 258, 194},
+      {520, 412, 292, 220},
+      {586, 450, 322, 250},
+      {644, 504, 364, 280},
+      {718, 560, 394, 310},
+      {792, 624, 442, 338},
+      {858, 666, 482, 382},
+      {929, 711, 509, 403},
+      {1003, 779, 565, 439},
+      {1091, 857, 611, 461},
+      {1171, 911, 661, 511},
+      {1273, 997, 715, 535},
+      {1367, 1059, 751, 593},
+      {1465, 1125, 805, 625},
+      {1528, 1190, 868, 658},
+      {1628, 1264, 908, 698},
+      {1732, 1370, 982, 742},
+      {1840, 1452, 1030, 790},
+      {1952, 1538, 1112, 842},
+      {2068, 1628, 1168, 898},
+      {2188, 1722, 1228, 958},
+      {2303, 1809, 1283, 983},
+      {2431, 1911, 1351, 1051},
+      {2563, 1989, 1423, 1093},
+      {2699, 2099, 1499, 1139},
+      {2809, 2213, 1579, 1219},
+      {2953, 2331, 1663, 1273}
+  };
 }

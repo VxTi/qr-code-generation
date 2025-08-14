@@ -3,6 +3,7 @@ import qr.ErrorCorrection;
 import qr.QRCodeBuilder;
 
 import javax.imageio.ImageIO;
+import java.awt.*;
 import java.io.File;
 import java.io.IOException;
 
@@ -11,8 +12,10 @@ public class Main {
 
     var qr = new QRCodeBuilder()
         .setErrorCorrection(ErrorCorrection.LOW)
-        .setMaskPattern(MaskPattern.MASK1)
-        .setData("HELLO WORLD 123 123 123 123 HI")
+        .setMaskPattern(MaskPattern.MASK0)
+        .setBackgroundColor(Color.WHITE)
+        .setModuleSize(20)
+        .setData("https://google.com")
         .build();
 
     ImageIO.write(qr.getImage(), "PNG", new File("qr-code.png"));
